@@ -1,0 +1,181 @@
+#include <sys/types.h>
+#include <sys/socket.h>
+#include <netinet/in.h>
+#include <arpa/inet.h>
+#include <errno.h>
+#include <iostream>
+#include <stdio.h>
+#include <string.h>
+#include <unistd.h>
+#include <stdio_ext.h>
+#include <stdlib.h>
+#include <signal.h>
+#include <wait.h>
+using namespace std;
+
+#define MAXLINE 50
+
+//********readline function*******//
+int readline(int fd, char* buf, int len)
+{
+	int bytes, bytes_get;
+	char x;
+	char *y;
+	if (buf == NULL || len <= 0)
+	{
+		errno = EINVAL;
+		return -1;
+	}
+
+	bytes_get = 0;
+	y = buf;
+	while (1)
+	{
+		bytes = read(fd, &x, 1);  // returns one character per function call 
+		if (bytes == -1)
+		{
+			if (errno == EINTR)
+				continue;
+			else
+				return -1;
+		}
+		else if (bytes == 0)
+		{
+			if (bytes_get == 0)  //read no character
+				return 0;
+			else   break;      //a line terminated with a newline
+		}
+		if (bytes_get<len - 1)
+		{
+			bytes_get++;
+			*y = x;
+			y++;
+		}
+		if (x == EOF) return -1;  //turn to close the socket
+		if (x == '\n')
+			break;
+	}
+	*y = '\0';
+	return bytes_get;
+}
+
+//*************writen function**********//
+int writen(int fd, char* buf, int len)
+{
+	char*  sen = buf;
+	int bytes_left = len;    //total characters need to be writen
+	int bytes_written;
+	while (bytes_left>0)
+	{
+		bytes_written = write(fd, sen, bytes_left);
+		if (bytes_written <= 0)
+		{
+			if (bytes_written<=0 && errno == EINTR)
+				bytes_written = 0;
+			else     return -1;
+		}
+		sen += bytes_written;
+		bytes_left -= bytes_written;
+	}
+	return bytes_written;
+}
+
+
+//Handler for process the SIGCHLD when child is terminated 
+void sig_handling(int sig) {
+	int status;
+	pid_t pid;
+	if (sig == SIGCHLD)
+	{
+		//waitpid to kill zombie
+		pid = waitpid(-1, &status, WNOHANG);
+		if (WIFEXITED(status))
+		{
+			printf("process %d exited,return value=%d\n", pid, WEXITSTATUS(status));
+		}
+	}
+}
+
+void str_echo(int sockfd)
+{
+	ssize_t n;
+	char buf[MAXLINE];
+again:
+	while ((n = readline(sockfd, buf, MAXLINE))>0)//read
+		writen(sockfd, buf, n);//echo
+	if (n<0 && errno == EINTR)
+		goto again;
+	else if (n<0)
+		{exit(1);
+                cout<<"str_echo :read error"<<endl;}
+}
+
+
+
+
+int main(int argc, char *argv[])
+{
+	if (argc != 2)
+	{
+		printf("command error");
+		exit(0);
+	}
+	int port_num;
+	int ss = socket(AF_INET, SOCK_STREAM, 0);
+	struct sockaddr_in servaddr;
+	
+//****get port number*******//
+	for (char *p = argv[1]; *p != '\0'; p++) {
+		if (*p >= '0' && *p <= '9') {
+			port_num = port_num * 10 + (*p - '0');
+		}
+		else {
+			printf("Invaild port number error\n");
+			exit(0);
+		}
+	}
+	printf("Port number is:%d\n", port_num);
+
+        memset(&servaddr,0,sizeof(struct sockaddr_in));
+        
+        servaddr.sin_family = AF_INET;
+	servaddr.sin_port = htons(port_num);
+	servaddr.sin_addr.s_addr = INADDR_ANY;
+	
+        if (bind(ss, (const struct sockaddr*)&servaddr, sizeof(struct sockaddr_in))==-1) 
+{
+		printf("Binding socket error.");
+		printf("error number is %d ",(int)errno);
+		exit(0);
+	}
+	else {
+		printf("Socket binded successfully.\n");
+	}
+	
+	if (listen(ss, 10) < 0) {
+		printf("Unable to find client.\n");
+		printf("Error number%d\n ", (int)errno);
+		exit(0);
+	}
+	else {
+		//listen to socket and waiting for client
+		printf("Listening to the cilent.\n");
+	}
+	
+	struct sigaction act;
+	act.sa_handler = sig_handling;
+	sigemptyset(&act.sa_mask);
+	act.sa_flags = 0;
+	sigaction(SIGCHLD, &act, 0);
+
+	for (;;) {
+		pid_t childpid;
+		int connect = accept(ss, NULL, NULL);
+                str_echo(connect);
+		if ((childpid = fork()) == 0) {
+                            close(ss);
+                            exit(0);
+		}
+         close(connect);         
+	}
+}
